@@ -1,0 +1,532 @@
+---
+title: "Portfolio Optimization under Power Law Returns"
+author: "Christopher McDonald"
+date: "26 Aug 2022"
+abstract: >
+    Monte-Carlo simulation is used to evaluate the distribution
+    of returns for portfolios of investments made at the seed stage.
+    The results confirm that the main benefit of
+    diversification is a higher typical (median) return multiplier.
+    Under the simple model presented, gains from diversification
+    reach diminishing returns at around 1000 firms for "early-exit"
+    strategies, but continue to be substantial beyond this
+    for "late-exit" strategies.
+    Limitations of the model are briefly discussed.
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    theme: "readable"
+bibliography: references.bib
+toc-title: "Table of Contents"
+---
+
+```{r notebook_settings, include=FALSE}
+# set output device to svg
+knitr::opts_chunk$set(dev = "svg")
+knitr::opts_chunk$set(fig.topcaption = TRUE)
+colourise <- function(x, color) {
+    if (knitr::is_latex_output()) {
+        sprintf("\\textcolor{%s}{%s}", color, x)
+    } else if (knitr::is_html_output()) {
+        sprintf("<span style='color: %s;'>%s</span>", color, x)
+    } else {
+        x
+    }
+}
+```
+
+```{css set_styles, echo=FALSE}
+caption, .caption {
+    padding-top: 8px;
+    padding-bottom: 8px;
+    color: #656565;
+    text-align: left;
+}
+```
+
+```{r setup_environment, include=FALSE}
+# data manipulation and visualisation tools
+library(tidyverse)
+
+# tables
+library(knitr)
+
+# simulate from arbitrary models, represented as directed graphs
+source("R/simulate.R")
+
+# functions which generate data draw from various return distributions (used as
+# inputs to simulate.R)
+source("R/model.R")
+```
+
+# Introduction
+
+## Previous work
+
+What is known about the distribution of returns in early-stage venture
+investments?
+
+The most comprehensive report I could find on this topic is the AngelList
+report
+_[Startup Growth and Venture Returns (Othman, 2019)](https://angel.co/pdf/growth.pdf)_.
+I will summarise its methods, main results and the
+conclusions of the author below.
+
+The report uses AngelList's data on early-stage venture investments to study
+the distribution of returns for "winning" investments - that is, investments
+with a return multiplier >1.
+They study how this distribution varies with 2 factors: (1) the duration of the
+investment^[More precisely, the effective duration of the investment. See the
+report for details.] and (2) the time that the initial investment is made
+(e.g. seed stage, series A, series B etc).
+
+The main findings of the report are:
+
+* A power law (i.e. [Pareto](https://en.wikipedia.org/wiki/Pareto_distribution))
+distribution appears to describe the distribution of multipliers well. In
+particular, it fits the data better than a lognormal distribution.
+
+* The thickness of the power law tail (determined by its parameter $\alpha$)
+increases with the duration of the investment, and is higher for earlier
+investments than later ones.
+
+* In particular, the best fit model for seed stage investments with durations of
+5 or more years is a Pareto distribution with a power $\alpha < 1$^[The report
+defines a power law slightly differently to the standard definition of the
+Pareto distribution. Here I will use the standard definition.]. This model
+predicts an unbounded (i.e. infinite) expected multiplier.
+
+* Startups tend to grow faster (in the sense of having a higher IRR) in their
+earlier years, and slower in their later years. They provide empirical data to
+back up this claim.
+
+Based on these results, they make several conclusions:
+
+* There is a qualitative difference between seed stage investments and later
+investments; seed stage investments have theoretically infinite
+multipliers, while the expected multipliers for later stage investments are
+bounded.
+
+* Seed stage investors can increase their expected multiplier via
+diversification (that is, by adding firms to their portfolio).
+
+* Seed stage investors "should invest in every credible deal", while later-stage
+investors "should be more thoughtful and discerning" about their investments.
+
+* The fundamental nature of startup stock (as an asset class) changes over its
+lifetime.
+
+## Outline
+
+In [Theory], I argue that the infinite expected multiplier emphasized by
+@othman_report is misleading.
+Then in [Simulation Study] I explain the assumptions, methods and results
+of the simulation study I performed.
+Finally in [Discussion] I briefly discuss my main findings, and list
+the weaknesses of my model.
+
+# Theory
+
+In absence of anything else, physics sets a hard upper limit on the maximum
+achievable return for any venture^[It appears that the maximum value we can
+produce in any given volume is finite. Since our speed of expansion is limited
+by the speed of light, this implies rates of growth must be finite.].
+This tells us that the infinite expected multipliers for seed-stage investments
+predicted by @othman_report's model is misleading, and should not be taken literally.
+(Common sense suggests that the real upper limit on multipliers are
+much lower than the limit set by physics.)
+
+This contradicts @othman_report's claim that seed-stage investments are
+"qualitatively" (as well as "quantitatively") different to later-stage
+investments.
+Specifically, once you introduce a maximum feasible rate of return,
+the overall expected multiplier must be finite.
+However, it is likely that seed-stage investments are still
+"quantitatively" very different to later-stage investments - for example,
+they likely offer much higher expected multipliers.
+
+To take into account the existence of a maximum possible return multiplier,
+@othman_report's model (of Pareto-distributed multipliers) can be modified by
+introducing a "cut-off" scale $x_{\text{max}}$.
+The largest multiplier observed in Othman was 115x, while Peter Thiel
+is said^[https://www.angellist.com/blog/what-angellist-data-says-about-power-law-returns-in-venture-capital]
+to have achieved a multipler of 2200x on his investment in
+Facebook [@othman_blog].
+To be conservative, I will use $x_{\text{max}} = 10^6$,
+which corresponds to a $10 billion return on an initial investment
+of $10,000.
+
+Power law relationships are notoriously hard to fit.
+Some data may match a power law over a given range, but have tails
+which drop off faster outside this range.
+It is hard to distinguish whether this is the case, because
+(as in this case) you may not have any observations from the
+range you want to study.
+
+# Simulation Study
+
+@othman_report provides tentative data on the distribution of returns for individual
+firms, as a function of the time of investment (e.g. seed stage, series A, ...)
+and the duration of the investment.
+Here I will use this data along with Monte-Carlo simulation methods to
+examine the distribution of returns for various portfolios, conditional on
+certain assumptions about how the portfolios were constructed.
+This allows me to compare the (theoretical) returns and risk profiles of
+different portfolios.
+
+These simulations aim to provide a better understanding of what heavy-tailed
+distributions mean for portfolios of investments, and what an optimal portfolio
+might look like in this case.
+While the model presented here is highly simplified, with more realistic
+assumptions, such simulations could also be used to directly inform
+decision-making.
+
+In this section, I first discuss the assumptions the model relies on.
+Following this, I explain briefly how the model was simulated, and then
+present the results.
+
+## Assumptions
+
+The following simplifying assumptions were used:
+
+* The number of firms that are available to invest in is effectively infinite.
+
+* The distribution of multipliers for each firm is independent.
+
+* An equal amount is invested in each firm.
+
+* There is no marginal cost to investing in an extra firm.
+
+* Each investment is made at the seed stage.
+
+* A given firm succeeds (achieves a positive multiplier) with probability
+$p = 0.5$. In other words, a firm's investment multiple $m$ has 
+$\mathbb{P}(m \gt 1) = p = \frac{1}{2}$ and
+$\mathbb{P}(m \le 1) = 1 - p  = \frac{1}{2}$.
+
+* The multipliers of successful firms are Pareto-distributed
+(or truncated Pareto -distributed) with scale parameter
+$x_{\text{min}} = 1$, and a shape parameter $\alpha$ which
+depends on the duration of the investment $t$ as shown below.
+
+```{r display_power_law, echo = FALSE, results = "asis"}
+power_law_parameter <- tibble(
+    duration = 1:8,
+    shape = c(5, 3, 2.3, 2.1, 2, 1.93, 1.86, 1.8) - 1,
+)
+kable(
+    power_law_parameter,
+    col.names = c("Investment Duration (years)", "Shape Parameter $\\alpha$"),
+    caption = str_c(
+        "Table 1: Shape parameter $\\alpha$ of the distribution of the",
+        " multiplier $m$, as a function of investment duration.",
+        " Source: Otham (2019), Figure 7."
+    ),
+    escape = FALSE
+)
+```
+
+```{r plot_success_distribution, echo=FALSE, warning=FALSE, fig.cap="Figure 1: Distribution of multipliers for successful (m > 1)  firms as a function of investment duration."}
+#' Density function for of a Pareto-distributed random variable
+dpareto <- function(x, shape, scale) {
+    shape * (x / scale)^(-shape) / x
+}
+power_law_parameter %>%
+    expand_grid(x = seq(1, 5, length.out = 1e3)) %>%
+    mutate(density = dpareto(x = x, shape = shape, scale = 1)) %>%
+    ggplot(aes(x = x, y = density, colour = factor(duration))) +
+    geom_line() +
+    xlim(1, 5) +
+    labs(
+        x = "Multiplier",
+        y = "Probability Density",
+        colour = "Investment Duration\n(Years)"
+    )
+```
+
+* The multiplier of failing firms is $\text{Beta}(a, b)$-distributed with
+parameters $a = 3$ and $b = 1$ (corresponding to a mean of 0.75 and standard
+deviation of 0.2). This distribution is shown below.
+
+```{r plot_failure_distribution, echo=FALSE, fig.cap="Figure 2: Distribution of multipliers for failing (m < 1) firms. Mean multiplier is shown in red."}
+shape1 <- 3
+shape2 <- 1
+ggplot() +
+    geom_vline(xintercept = 0.75, col = "red", linetype = "dashed") +
+    geom_function(fun = dbeta, args = list(shape1 = shape1, shape2 = shape2)) +
+    labs(
+        x = "Multiplier",
+        y = "Probability Density"
+    ) +
+    lims(x = c(0, 1), y = c(0, 3))
+```
+
+* The distribution of returns is assumed to vary along 3 dimensions:
+    1. The number of firms in the portfolio $k$: either a "small" portfolio
+    ($k = 10$), a "medium" portfolio ($k = 100$) or a "large" portfolio
+    ($k = 1000$).
+    2. The duration of the investment $t$: "early exit" ($t = 2$ years) or
+    "late exit" ($t = 8$ years).
+    3. The base distribution $D$: the distribution that multipliers
+    $m$ are drawn from. Either a standard Pareto distribution
+    (the original model proposed by @othman_report), or a
+    truncated Pareto distribution - i.e. a Pareto distribution whose tail
+    is cut off at the maximum scale $x_{\text{max}} = 10^6$.
+
+## Methods
+
+The distribution of the multiplier $m$ for a given set of parameters was
+estimated using Monte-Carlo simulation.
+Specifically, the Monte-Carlo distribution for a given set of parameters
+($k$, $t$, $D$) was calculated as follows:
+
+* Randomly sample multipliers for each of the $k$ firms in the portfolio, based
+on the base distribution $D$ and the investment duration $t$.
+* Compute the overall multiplier of the $k$-firm portfolio by taking the mean of
+the multiplier over the firms in the portfolio.
+* Repeat this process $n$ times to gain $n$ samples from the distribution of 
+$k$-firm portfolio multipliers. Here a relatively large sample size was chosen
+($n = 10,000$) in order to ensure the tails are adequately sampled.
+
+```{r setup_model, echo=FALSE}
+model_graph <- graph_from_literal(success -+ multiplier) # styler: off, nolint
+pareto_model <- list(
+    success = success_simulator,
+    multiplier = multiplier_simulator
+)
+truncated_pareto_model <- list(
+    success = success_simulator,
+    multiplier = truncated_multiplier_simulator
+)
+```
+
+```{r setup_parameters, echo=FALSE}
+# Number of Monte Carlo samples
+n_samples <- 1e4
+
+#' Generate sets of parameters
+#'
+#' Arguments are any parameter which may vary between models
+collect_parameters <- function(exit_year) {
+    list(
+        success = list(
+            success_probability = 0.5
+        ),
+        multiplier = list(
+            # The power law parameter corresponding to exiting n years after an
+            # initial investment at the seed stage, for n = 1, 2, ..., 8.
+            power_law_parameter = c(5, 3, 2.3, 2.1, 2, 1.9, 1.8, 1.7) - 1,
+            exit_year = exit_year,
+            # Scale: maximum value of return. Only used in truncated model.
+            scale = 1e6,
+            shape1 = 3,
+            shape2 = 1
+        )
+    )
+}
+
+# Full set of models to simulate
+model_set <- expand_grid(
+    k = 10^(1:3),
+    exit_year = c(2, 8),
+    model_class = list(
+        `Pareto` = pareto_model,
+        `Truncated Pareto` = truncated_pareto_model
+    ),
+) %>%
+    mutate(model_parameters = map(exit_year, collect_parameters)) %>%
+    mutate(
+        model_function =
+            map2(
+                model_class,
+                model_parameters,
+                ~ partial(
+                    sim_dag,
+                    model_graph = model_graph,
+                    simulators = .x,
+                    parameters = .y
+                )
+            )
+    ) %>%
+    mutate(model_class = as_factor(names(model_class)))
+```
+
+## Results
+
+```{r run_simulation, echo=FALSE}
+# run Monte-Carlo simulation
+model_results <- model_set %>%
+    mutate(
+        samples = map2(k, model_function, portfolio_simulator, n = n_samples)
+    ) %>%
+    unnest(samples) %>%
+    select(!c(group_id, success_fraction))
+```
+
+A summary of the results is shown below.
+
+```{r summarise_results, echo=FALSE}
+results_summary <- model_results %>%
+    group_by(k, exit_year, model_class) %>%
+    summarise(
+        Mean = mean(net_multiplier),
+        Median = median(net_multiplier),
+        `Standard Deviation` = sd(net_multiplier),
+        `Mean Absolute Deviation` = mad(net_multiplier, constant = 1),
+        .groups = "drop"
+    ) %>%
+    arrange(exit_year, k) %>%
+    rename(
+        `Investment Duration (Years)` = exit_year,
+        `Portfolio Size` = k,
+        `Model Type` = model_class
+    )
+kable(
+    results_summary,
+    digits = 3,
+    escape = FALSE,
+    caption = "Table 2: Summary of results."
+)
+```
+
+In this case, the standard deviation mainly measures the thickness
+of the tail, since it is heavily skewed by outliers.
+As a result it is not especially useful as a measure of the typical
+variability you expect when sampling from the distribution.
+Instead, to measure variability we will use the mean absolute deviation (MAD),
+which tells us how much a given sample will typically vary from the median.
+
+Monte-Carlo distributions for the multipliers are plotted below.
+
+```{r plot_early_exits, echo=FALSE, warning=FALSE, fig.cap="Figure 3: Monte Carlo distribution of the return multiplier for early exits (t = 2 years)."}
+model_results %>%
+    filter(exit_year == 2) %>%
+    ggplot(aes(x = net_multiplier, fill = factor(k))) +
+    geom_density(alpha = 0.5) +
+    xlim(0, 2.5) +
+    facet_wrap(vars(model_class)) +
+    labs(
+        x = "Overall Multiplier",
+        y = "Probability Density",
+        fill = "Portfolio Size"
+    )
+```
+
+```{r plot_late_exits, echo=FALSE, warning=FALSE, fig.cap="Figure 4: Monte Carlo distribution of the return multiplier for late exits (t = 8 years)."}
+model_results %>%
+    filter(exit_year == 8) %>%
+    ggplot(aes(x = net_multiplier, fill = factor(k))) +
+    geom_density(alpha = 0.5) +
+    xlim(0, 50) +
+    facet_wrap(vars(model_class)) +
+    labs(
+        x = "Overall Multiplier",
+        y = "Probability Density",
+        fill = "Portfolio Size"
+    )
+```
+Some basic observations are:
+
+* For an investment duration of 2 years - corresponding a power of
+$\alpha = 2$ - the results for the Pareto and Truncated Pareto models are
+practically identical. This is expected, as the models only differ in the tails,
+which are unlikely to be sampled (given the "lightness" of the tail implied
+by the value of $\alpha$).
+
+* For this investment duration, the expected multiplier (1.37, 1.17 annualised)
+is independent of the portfolio size (as expected), and the median multiplier
+approaches the mean as the portfolio size increases - it is within 2% of the
+mean multiplier for a portfolio size of $k = 1000$.
+
+* For an investment duration of 8 years, corresponding to a power of
+$\alpha = 0.8$, the results for the Pareto and Truncated Pareto appear
+similar, but differ substantially in the tails.
+As expected, the Truncated Pareto model has a bounded mean (around 70x, or 1.7x
+annualised), while under the Pareto model the expected multiplier
+increases dramatically with portfolio size.
+In contrast, the median multiplier is almost identical between the two
+models (as expected if they differ only in the tails).
+
+* While the variability of the multiplier (as measured by the MAD) decreases
+with portfolio size in the "early-exit" case, variability _increases_ with
+portfolio size in the "late-exit" case. This can be seen clearly in the figures
+above. This is because (1) as the portfolio size increases, the chance of seeing
+outliers from the tail increases; and (2) outliers are extreme enough to
+substantially skew the average.
+
+# Discussion
+
+## Contributions
+
+The main contributions of this report are as follows:
+
+* It empirically confirms that the main benefit of diversification
+(i.e. a larger portfolio) is in a higher typical (median)
+multiplier.
+
+* The model suggests that for "early-exit" strategies, a diversified portfolio
+gives reduced variability, while for "late-exit" strategies, a diversified
+portfolio gives _increased_ variability (at least up to portfolio sizes of
+1000 firms).
+
+* The model also suggests that "late-exit" strategies perform better
+(annualised mean multipliers of 1.7) than "early-exit" strategies
+(annualised mean multiplier of 1.17) on average.
+
+* The results give some indication of how much diversification is optimal.
+Under the simple model above, the gains from diversification begin to
+reach diminishing returns at around $k = 1000$ firms in the early-exit case.
+However in the late-exit case, the gains from diversification
+continue to be substantial even as the size of the portfolio increases into
+the thousands of firms.
+
+* Contrary to @othman_report, I have argued (in [Theory]) that there is likely
+an upper limit on possible returns, which results in a bounded expected
+multiplier for any given investment.
+
+* Given finite expected multipliers for investments in individual firms,
+the expected multiplier of a portfolio is independent of its size - that is,
+adding firms to a portfolio does not improve your expected multiplier
+(contrary to what @othman_report says).
+So I argue that, in theory, the only reason to invest in a portfolio
+(of more than one firm) at all is to improve your risk profile.
+
+* However, my results provide support for most of @othman_report's
+practical recommendations.
+For example, the large gains found from diversification when investing at the
+seed stage suggest that "invest in every credible deal" is good advice for
+this stage.
+
+## Limitations
+
+There are many weaknesses and limitations of the simulation scheme presented
+here.
+Future work could more accurately model reality by taking the following
+factors into account:
+
+* Investors have a limited pool of firms they are able to invest in.
+* Firms vary, and investors have different information and beliefs about
+different firms and their likely returns. (In other words, my model does not
+take into account an investor's "edge".)
+* There are costs (due to research, due diligence etc) to investing in a given
+firm.
+* Usually there will be multiple investment and exit events for a given firm,
+rather than just one of each.
+    * Investors may make follow-on investments.
+    * Investors may adapt their investment strategy as they learn more about the
+firms they are invested in, and their valuations change.
+* Investors will likely allocate capital unevenly among firms.
+* In reality, the returns of firms will be somewhat correlated rather
+than independent.
+* The seed stage is not the only stage of investment; further work should
+look at investments at other stages.
+* It would be useful to see how the distribution of the return multiplier
+changes over the time.
+* The data source for the model parameters (specifically the power law
+power $\alpha$) needs to be checked for accuracy. For example, no confidence
+intervals (or other measures of uncertainty) were given in the original report.
+
+# References
+
+<div id = "refs"></div>
