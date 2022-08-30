@@ -58,6 +58,9 @@ source("R/simulate.R")
 # functions which generate data draw from various return distributions (used as
 # inputs to simulate.R)
 source("R/model.R")
+
+# set seed for reproducibility
+set.seed(123)
 ```
 
 # Introduction
